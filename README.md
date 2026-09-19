@@ -22,3 +22,6 @@ streamlit run app.py
 Neo4j is not required. The application uses a small in-memory educational graph
 and a Python query simulator to demonstrate the semantics of the selected
 Cypher patterns, in accordance with the graph-experiment instruction.
+
+### This vlab has been deployed using Stramlit Cloud
+https://query-knowledge-graphs-cypher-lmkcpmj5ugeb2dsuqyfqj7.streamlit.app/
