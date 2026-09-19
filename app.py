@@ -30,6 +30,35 @@ html, body, [class*="css"] {
     background: #ffffff;
 }
 
+/* Force readable dark text throughout the Virtual Lab */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"] {
+    color: #222222 !important;
+}
+
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span {
+    color: #222222;
+}
+
+.vlab-text {
+    color: #222222 !important;
+}
+
+.vlab-aim {
+    color: #222222 !important;
+}
+
+.vlab-note {
+    color: #222222 !important;
+}
+
+.vlab-h3 {
+    color: #333333 !important;
+}
+
 /* Hide Streamlit's default chrome where possible */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
@@ -214,6 +243,18 @@ div[data-testid="stButton"] > button:hover {
     text-align: center;
     color: #777;
     font-size: 12px;
+}
+/* Disable Streamlit's stale/fade-during-rerun effect */
+.stApp [data-stale="true"],
+.element-container:has([data-stale="true"]),
+.stMarkdown, .element-container {
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Some Streamlit versions use this class instead */
+.main .block-container * {
+    opacity: 1 !important;
 }
 </style>
 """, unsafe_allow_html=True)
