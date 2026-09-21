@@ -5,6 +5,9 @@ import plotly.graph_objects as go
 from fpdf import FPDF
 from datetime import datetime
 from io import BytesIO
+import html
+import random
+import re
 
 # ============================================================
 # VIRTUAL LAB: QUERY KNOWLEDGE GRAPHS USING CYPHER
@@ -28,35 +31,6 @@ html, body, [class*="css"] {
 
 .stApp {
     background: #ffffff;
-}
-
-/* Force readable dark text throughout the Virtual Lab */
-.stApp,
-[data-testid="stAppViewContainer"],
-[data-testid="stMain"] {
-    color: #222222 !important;
-}
-
-[data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li,
-[data-testid="stMarkdownContainer"] span {
-    color: #222222;
-}
-
-.vlab-text {
-    color: #222222 !important;
-}
-
-.vlab-aim {
-    color: #222222 !important;
-}
-
-.vlab-note {
-    color: #222222 !important;
-}
-
-.vlab-h3 {
-    color: #333333 !important;
 }
 
 /* Hide Streamlit's default chrome where possible */
@@ -205,6 +179,56 @@ header {visibility: hidden;}
     margin: 12px 0;
 }
 
+.cypher-query {
+    background: #f4f7f9;
+    border: 1px solid #c8d6df;
+    border-radius: 3px;
+    color: #1f2933;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    overflow: visible;
+    padding: 14px 16px;
+    white-space: pre-wrap;
+}
+
+.cypher-keyword {
+    border-bottom: 2px dotted #f36f21;
+    color: #236b9d;
+    cursor: help;
+    font-weight: 700;
+    position: relative;
+}
+
+.cypher-keyword::after {
+    background: #263238;
+    border-radius: 3px;
+    top: calc(100% + 8px);
+    color: #ffffff;
+    content: attr(data-definition);
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    font-weight: 400;
+    left: 50%;
+    line-height: 1.35;
+    opacity: 0;
+    padding: 7px 9px;
+    pointer-events: none;
+    position: absolute;
+    transform: translateX(-50%) translateY(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    visibility: hidden;
+    white-space: normal;
+    width: 190px;
+    z-index: 10;
+}
+
+.cypher-keyword:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    visibility: visible;
+}
+
 .result-box {
     border: 1px solid #b9d7b0;
     background: #fbfff9;
@@ -244,18 +268,6 @@ div[data-testid="stButton"] > button:hover {
     color: #777;
     font-size: 12px;
 }
-/* Disable Streamlit's stale/fade-during-rerun effect */
-.stApp [data-stale="true"],
-.element-container:has([data-stale="true"]),
-.stMarkdown, .element-container {
-    opacity: 1 !important;
-    transition: none !important;
-}
-
-/* Some Streamlit versions use this class instead */
-.main .block-container * {
-    opacity: 1 !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -287,12 +299,59 @@ EDGES = [
 
 NODE_BY_ID = {n["id"]: n for n in NODES}
 
+
+def graph_from_csv(uploaded_file):
+    """Build the lab graph from a relationship edge-list CSV."""
+    frame = pd.read_csv(uploaded_file)
+    required = {"source", "relationship", "target"}
+    missing = required.difference(frame.columns)
+    if missing:
+        missing_columns = ", ".join(sorted(missing))
+        raise ValueError(f"Missing required column(s): {missing_columns}")
+    if frame.empty:
+        raise ValueError("The CSV file does not contain any relationships.")
+
+    nodes = {}
+
+    def add_node(node_id, label, name):
+        node_id = str(node_id).strip()
+        if not node_id or node_id.lower() == "nan":
+            raise ValueError("Node IDs cannot be empty.")
+        nodes.setdefault(node_id, {
+            "id": node_id,
+            "label": str(label).strip() if pd.notna(label) else "Entity",
+            "name": str(name).strip() if pd.notna(name) else node_id
+        })
+
+    edges = []
+    for _, row in frame.iterrows():
+        source = str(row["source"]).strip()
+        target = str(row["target"]).strip()
+        relationship = str(row["relationship"]).strip().upper()
+        if not source or not target or not relationship:
+            raise ValueError("Each row needs source, relationship and target values.")
+
+        add_node(source, row.get("source_label"), row.get("source_name"))
+        add_node(target, row.get("target_label"), row.get("target_name"))
+        edges.append((source, relationship, target))
+
+    return list(nodes.values()), edges
+
 TITLE = "Query Knowledge Graphs using Cypher"
 
 AIM = (
     "To understand and demonstrate how Cypher queries can be used to retrieve "
     "nodes, relationships and multi-hop connections from a knowledge graph."
 )
+
+REAL_WORLD_APPLICATIONS = [
+    "Recommendation systems connect people, products, films or courses to suggest relevant items.",
+    "Fraud detection follows networks of accounts, devices, merchants and transactions to reveal suspicious paths.",
+    "Healthcare knowledge graphs connect patients, symptoms, medicines and research to support clinical discovery.",
+    "Search engines use entities and relationships to understand people, places, organisations and topics.",
+    "Social and professional platforms analyse connections to identify communities, experts and useful introductions.",
+    "Supply-chain systems trace suppliers, parts, shipments and dependencies to locate delays or risks.",
+]
 
 OBJECTIVES = [
     "Understand nodes, labels, relationships and properties in a knowledge graph.",
@@ -315,6 +374,13 @@ pattern to be found and the information to return.
 This Virtual Lab uses a small education-domain graph containing students,
 courses, an institution and a company. It is intentionally small so that the
 relationships and query results can be understood visually during an experiment.
+
+The same ideas are used in real-world systems. Recommendation engines traverse
+connections between users and products; fraud-monitoring systems follow links
+between accounts, devices and transactions; healthcare knowledge graphs connect
+symptoms, medicines and research; and search engines use entity relationships to
+return more meaningful results. Learning Cypher therefore provides a practical
+way to explore how connected data supports decisions in many domains.
 """
 
 THEORY_SECTIONS = [
@@ -438,8 +504,127 @@ QUERY_DEFS = {
     }
 }
 
+ACTIVE_QUERY_SPECS = {}
+
+
+def build_csv_query_defs(nodes, edges):
+    """Create query choices that match the labels and relationships in a CSV graph."""
+    query_defs = {
+        "CSV 1 — Retrieve all nodes": {
+            "cypher": "MATCH (n) RETURN n",
+            "concept": "Node retrieval",
+            "description": "Retrieves every node in the uploaded graph.",
+            "kind": "all_nodes"
+        },
+        "CSV 2 — Retrieve all relationships": {
+            "cypher": "MATCH (a)-[r]->(b) RETURN a, r, b",
+            "concept": "Relationship retrieval",
+            "description": "Retrieves every relationship in the uploaded graph.",
+            "kind": "all_edges"
+        }
+    }
+    specs = {
+        "CSV 1 — Retrieve all nodes": "all_nodes",
+        "CSV 2 — Retrieve all relationships": "all_edges"
+    }
+
+    labels = sorted({node["label"] for node in nodes})
+    for index, label in enumerate(labels, start=3):
+        name = f"CSV {index} — Retrieve {label} nodes"
+        query_defs[name] = {
+            "cypher": f"MATCH (n:{label}) RETURN n",
+            "concept": "Label-based retrieval",
+            "description": f"Retrieves all nodes with the {label} label from the uploaded graph.",
+            "kind": "label",
+            "label": label
+        }
+        specs[name] = ("label", label)
+
+    relationships = sorted({edge[1] for edge in edges})
+    offset = len(labels) + 3
+    for index, relationship in enumerate(relationships, start=offset):
+        name = f"CSV {index} — Retrieve {relationship} relationships"
+        query_defs[name] = {
+            "cypher": f"MATCH (a)-[r:{relationship}]->(b) RETURN a, r, b",
+            "concept": "Relationship traversal",
+            "description": f"Retrieves every {relationship} relationship from the uploaded graph.",
+            "kind": "relationship",
+            "relationship": relationship
+        }
+        specs[name] = ("relationship", relationship)
+
+    return query_defs, specs
+
+CYPHER_KEYWORDS = {
+    "MATCH": "Finds graph patterns that match the data.",
+    "OPTIONAL MATCH": "Finds a pattern when possible without removing unmatched rows.",
+    "WHERE": "Filters matched rows using a condition.",
+    "RETURN": "Chooses the values or graph elements to display.",
+    "CREATE": "Creates new nodes or relationships.",
+    "MERGE": "Matches an existing pattern or creates it when absent.",
+    "DELETE": "Deletes matched nodes or relationships.",
+    "DETACH DELETE": "Deletes a node and its connected relationships.",
+    "SET": "Adds or updates node and relationship properties.",
+    "REMOVE": "Removes a property or label.",
+    "WITH": "Passes selected results to the next query part.",
+    "UNWIND": "Expands a list into separate rows.",
+    "ORDER BY": "Sorts the returned results.",
+    "LIMIT": "Restricts the number of returned rows.",
+    "SKIP": "Skips a specified number of returned rows.",
+    "AS": "Assigns an alias to a returned expression."
+}
+
+
+def render_cypher_query(query):
+    """Render Cypher with hover definitions for recognized keywords."""
+    escaped_query = html.escape(query)
+    keyword_pattern = r"\b(?:" + "|".join(
+        re.escape(keyword) for keyword in sorted(CYPHER_KEYWORDS, key=len, reverse=True)
+    ) + r")\b"
+
+    def replace_keyword(match):
+        keyword = match.group(0)
+        definition = html.escape(CYPHER_KEYWORDS[keyword])
+        return (
+            f'<span class="cypher-keyword" title="{definition}" data-definition="{definition}">'
+            f"{keyword}</span>"
+        )
+
+    return re.sub(keyword_pattern, replace_keyword, escaped_query)
+
 # ---------------------- QUERY ENGINE -------------------------
 def execute_query(name):
+    if name in ACTIVE_QUERY_SPECS:
+        spec = ACTIVE_QUERY_SPECS[name]
+        if spec == "all_nodes":
+            return NODES, [], "All nodes in the uploaded graph were retrieved."
+        if spec == "all_edges":
+            rows = [
+                {
+                    "source": NODE_BY_ID[source]["name"],
+                    "relationship": relationship,
+                    "target": NODE_BY_ID[target]["name"]
+                }
+                for source, relationship, target in EDGES
+            ]
+            return rows, EDGES, "All relationships in the uploaded graph were retrieved."
+
+        kind, value = spec
+        if kind == "label":
+            rows = [node for node in NODES if node["label"] == value]
+            return rows, [], f"All {value} nodes in the uploaded graph were retrieved."
+        if kind == "relationship":
+            selected_edges = [edge for edge in EDGES if edge[1] == value]
+            rows = [
+                {
+                    "source": NODE_BY_ID[source]["name"],
+                    "relationship": relationship,
+                    "target": NODE_BY_ID[target]["name"]
+                }
+                for source, relationship, target in selected_edges
+            ]
+            return rows, selected_edges, f"All {value} relationships in the uploaded graph were retrieved."
+
     if name == "Q1 — Retrieve all students":
         rows = [n for n in NODES if n["label"] == "Student"]
         return rows, [], "All Student nodes were retrieved."
@@ -526,7 +711,7 @@ POSITIONS = {
     "tcs": (2.3, -1.3)
 }
 
-def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None):
+def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None, preview=False):
     """Return a Plotly figure.
 
     - If only_subgraph is True, draw only the nodes in `subgraph_nodes` and
@@ -538,11 +723,26 @@ def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None)
     highlight_edges = highlight_edges or []
     highlighted = {(e[0], e[2]) for e in highlight_edges}
 
+    positions = POSITIONS
+    graph_ids = set(NODE_BY_ID)
+    if preview:
+        positions = {
+            "alice": (-2.8, 1.3), "bob": (-2.8, -0.1), "charlie": (-2.8, -1.5),
+            "python": (0.0, 1.3), "ml": (0.0, -0.1), "graph": (0.0, -1.5),
+            "college": (2.7, 0.7), "tcs": (2.7, -1.0)
+        }
+    if not graph_ids.issubset(positions):
+        layout_graph = nx.Graph()
+        layout_graph.add_nodes_from(graph_ids)
+        layout_graph.add_edges_from((source, target) for source, _, target in EDGES)
+        layout = nx.spring_layout(layout_graph, seed=7)
+        positions = {node_id: (float(x) * 3.0, float(y) * 2.2) for node_id, (x, y) in layout.items()}
+
     fig = go.Figure()
 
     def draw_edge(s, rel, t, is_highlight=False):
-        x1, y1 = POSITIONS[s]
-        x2, y2 = POSITIONS[t]
+        x1, y1 = positions[s]
+        x2, y2 = positions[t]
         fig.add_trace(go.Scatter(
             x=[x1, x2], y=[y1, y2],
             mode="lines",
@@ -567,13 +767,14 @@ def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None)
 
         # Relationship label placed midway
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2
-        fig.add_annotation(
-            x=mx, y=my + 0.08,
-            text=rel,
-            showarrow=False,
-            font=dict(size=10, color="#444444"),
-            bgcolor="rgba(255,255,255,0.9)"
-        )
+        if not preview:
+            fig.add_annotation(
+                x=mx, y=my + 0.08,
+                text=rel,
+                showarrow=False,
+                font=dict(size=10, color="#444444"),
+                bgcolor="rgba(255,255,255,0.9)"
+            )
 
     # If requested, show only the exact subgraph (nodes + edges)
     if only_subgraph and (highlight_edges or subgraph_nodes):
@@ -585,7 +786,7 @@ def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None)
         # draw the nodes involved in the subgraph
         for nid in nodes_to_draw:
             n = NODE_BY_ID[nid]
-            x, y = POSITIONS[nid]
+            x, y = positions[nid]
             color = {
                 "Student": "#74b82a",
                 "Course": "#f36f21",
@@ -613,6 +814,7 @@ def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None)
 
         # Node traces grouped by type
         type_order = ["Student", "Course", "Institution", "Company"]
+        type_order.extend(sorted({n["label"] for n in NODES if n["label"] not in type_order}))
         color_map = {
             "Student": "#74b82a",
             "Course": "#f36f21",
@@ -624,8 +826,8 @@ def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None)
             if not group:
                 continue
             fig.add_trace(go.Scatter(
-                x=[POSITIONS[n["id"]][0] for n in group],
-                y=[POSITIONS[n["id"]][1] for n in group],
+                x=[positions[n["id"]][0] for n in group],
+                y=[positions[n["id"]][1] for n in group],
                 mode="markers+text",
                 text=[n["name"] for n in group],
                 textposition="middle center",
@@ -635,7 +837,8 @@ def graph_figure(highlight_edges=None, only_subgraph=False, subgraph_nodes=None)
                 name=label
             ))
 
-        fig.update_layout(title=dict(text="Knowledge Graph used in the Experiment", x=0.01, font=dict(size=18, color="#2e86c1")))
+        title = "Preview: Connected Data in the Virtual Lab" if preview else "Knowledge Graph used in the Experiment"
+        fig.update_layout(title=dict(x=0.01, font=dict(size=18, color="#2e86c1")))
 
     fig.update_layout(
         height=520,
@@ -683,11 +886,131 @@ QUIZ = [
     ("Why is a small local graph used here?",
      ["To avoid graph querying", "To demonstrate the experiment without requiring Neo4j",
       "To remove relationships", "To prevent visualization"], 1,
-     "The assignment does not require Neo4j for the graph experiment.")
+        "The assignment does not require Neo4j for the graph experiment."),
+        ("Which symbol starts a node pattern in Cypher?",
+        ["()", "[]", "{}", "<>"], 0,
+        "Parentheses represent nodes in a Cypher pattern."),
+        ("Which symbol represents a relationship pattern?",
+        ["()", "[]", "{}", "//"], 1,
+        "Square brackets represent relationships."),
+        ("What does the arrow in a relationship pattern show?",
+        ["Direction", "Property type", "Node label", "Query length"], 0,
+        "An arrow shows the direction of a directed relationship."),
+        ("Which clause creates new graph data?",
+        ["MATCH", "CREATE", "RETURN", "WHERE"], 1,
+        "CREATE is used to create nodes and relationships."),
+        ("Which clause removes matched data?",
+        ["DELETE", "MATCH", "WITH", "ORDER BY"], 0,
+        "DELETE removes matched nodes or relationships."),
+        ("Which clause changes a property?",
+        ["SET", "RETURN", "MATCH", "UNWIND"], 0,
+        "SET updates or adds properties."),
+        ("What does a label describe?",
+        ["A node category", "A relationship direction", "A numeric value", "A result row"], 0,
+        "Labels classify nodes, such as Student or Course."),
+        ("Which query returns every node?",
+        ["MATCH (n) RETURN n", "MATCH ()-[]->()", "RETURN *", "CREATE (n)"], 0,
+        "The pattern MATCH (n) matches nodes without requiring a label."),
+        ("What does `s` represent in `(s:Student)`?",
+        ["A variable", "A relationship", "A database", "A property"], 0,
+        "s is the variable bound to the matched Student node."),
+        ("What does `:Student` represent in `(s:Student)`?",
+        ["A node label", "A property value", "A query alias", "A function"], 0,
+        "Student is the label required for the node."),
+        ("Which clause can sort query results?",
+        ["ORDER BY", "SORT", "GROUP", "ARRANGE"], 0,
+        "ORDER BY sorts returned rows."),
+        ("Which clause limits the number of returned rows?",
+        ["LIMIT", "CAP", "TOP", "COUNT"], 0,
+        "LIMIT restricts the number of rows returned."),
+        ("Which function counts matched rows?",
+        ["count()", "total()", "sizeRows()", "number()"], 0,
+        "count() returns the number of values or rows."),
+        ("What does `RETURN s.name` produce?",
+        ["The name property of s", "The whole database", "The relationship type", "A new node"], 0,
+        "Property projection returns the selected name value."),
+        ("What does `WHERE s.year = 3` do?",
+        ["Filters by year", "Creates year 3", "Deletes year 3", "Renames the node"], 0,
+        "The predicate keeps only matching rows."),
+        ("What is a graph path?",
+        ["A sequence of connected nodes and relationships", "A table column", "A label list", "A database backup"], 0,
+        "A path records a traversal through a graph."),
+        ("Why use variables in a Cypher pattern?",
+        ["To refer to matched elements later", "To encrypt data", "To create indexes automatically", "To replace labels"], 0,
+        "Variables allow nodes and relationships to be referenced in RETURN or WHERE."),
+        ("Which pattern matches a student enrolled in a course?",
+        ["(s:Student)-[:ENROLLED_IN]->(c:Course)", "[s:Student]->[c:Course]", "(s)-ENROLLED_IN-(c)", "Student => Course"], 0,
+        "This pattern matches the directed relationship between the two labeled nodes."),
+        ("What is an incoming relationship?",
+        ["A relationship directed toward a node", "A deleted relationship", "A property", "A node label"], 0,
+        "Incoming means the arrow points into the node being considered."),
+        ("What is an outgoing relationship?",
+        ["A relationship directed away from a node", "A relationship without a type", "A node property", "A query comment"], 0,
+        "Outgoing means the arrow starts at the node."),
+        ("Which pattern can match either direction?",
+        ["(a)-[:RELATED_TO]-(b)", "(a)->(b)", "(a)<-(b)", "(a)[:RELATED_TO](b)"], 0,
+        "An undirected pattern omits the arrow direction."),
+        ("What is a relationship type?",
+        ["A category of connection", "A node identifier", "A property value", "A query result"], 0,
+        "Types name relationships such as ENROLLED_IN or WORKED_AT."),
+        ("Which graph element can have properties?",
+        ["Nodes and relationships", "Only labels", "Only arrows", "Only query clauses"], 0,
+        "Both nodes and relationships can store key-value properties."),
+        ("What is a knowledge graph especially good at representing?",
+        ["Entities and their connections", "Only isolated numbers", "Only images", "Only sequential text"], 0,
+        "Knowledge graphs make relationships between entities explicit."),
+        ("What does a two-hop traversal contain?",
+        ["Two relationship steps", "Two databases", "Two labels only", "No relationships"], 0,
+        "A two-hop traversal follows two relationships from the starting point."),
+        ("In the lab graph, what does Alice connect to directly?",
+        ["Python and Machine Learning", "TCS only", "Graph Analytics only", "No courses"], 0,
+        "Alice has ENROLLED_IN relationships to Python and Machine Learning."),
+        ("Which entity is labeled Company in the lab graph?",
+        ["TCS", "Python", "Tech University", "Alice"], 0,
+        "TCS is the example Company node."),
+        ("Which entity is labeled Institution in the lab graph?",
+        ["Tech University", "TCS", "Graph Analytics", "Bob"], 0,
+        "Tech University is the example Institution node."),
+        ("What relationship connects Charlie to TCS?",
+        ["WORKED_AT", "STUDIES_AT", "RELATED_TO", "ENROLLED_IN"], 0,
+        "Charlie has a WORKED_AT relationship to TCS."),
+        ("What relationship connects a student to a course in the lab?",
+        ["ENROLLED_IN", "WORKED_AT", "STUDIES_AT", "RELATED_TO"], 0,
+        "ENROLLED_IN connects students and courses."),
+        ("What relationship connects courses in the lab?",
+        ["RELATED_TO", "ENROLLED_IN", "WORKED_AT", "STUDIES_AT"], 0,
+        "RELATED_TO connects related courses."),
+        ("What relationship connects a student to the university?",
+        ["STUDIES_AT", "RELATED_TO", "WORKED_AT", "ENROLLED_IN"], 0,
+        "STUDIES_AT connects students and the institution."),
+        ("What does a graph visualization help learners see?",
+        ["Connections and paths", "Only source code", "Only quiz scores", "Database passwords"], 0,
+        "A visualization makes graph structure and traversals easier to inspect."),
+        ("Why does the simulator use an in-memory graph?",
+        ["To demonstrate queries without a database server", "To hide all relationships", "To prevent results", "To replace Cypher syntax"], 0,
+        "The small local graph keeps the experiment self-contained."),
+        ("What is the purpose of a query result table?",
+        ["To inspect matched values", "To define a new label", "To install Neo4j", "To draw a webpage"], 0,
+        "The table presents the values returned by the simulated query."),
+        ("What should a learner do before executing a query?",
+        ["Predict its result", "Delete the graph", "Change every label", "Close the lab"], 0,
+        "Prediction encourages understanding of the Cypher pattern."),
+        ("Which query best demonstrates property projection?",
+        ["RETURN s.name, s.year", "RETURN s", "CREATE (s)", "DELETE s"], 0,
+        "Projection returns selected properties rather than the whole node."),
+        ("Which query best demonstrates filtering?",
+        ["MATCH (s:Student) WHERE s.year = 3 RETURN s", "MATCH (s) RETURN s", "CREATE (s)", "DELETE (s)"], 0,
+        "WHERE filters matched students by their year property."),
+        ("Which query best demonstrates path retrieval?",
+        ["MATCH p=(a)-[]->(b) RETURN p", "MATCH (a) RETURN a", "SET a.x = 1", "DELETE a"], 0,
+        "Naming the path as p and returning p displays the complete traversal."),
+        ("What is the main benefit of a declarative query language?",
+        ["Describe what data is wanted", "Manually implement every traversal step", "Avoid all data", "Remove graph structure"], 0,
+        "Declarative queries focus on the desired pattern and result."),
 ]
 
 # ---------------------- PDF REPORT ---------------------------
-def make_pdf(name, roll, date_str, trials, score, observations):
+def make_pdf(name, roll, date_str, trials, score, observations, quiz_total):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
@@ -783,7 +1106,7 @@ def make_pdf(name, roll, date_str, trials, score, observations):
     pdf.cell(0, 7, "Quiz Result")
     pdf.ln(8)
     pdf.set_font("Helvetica", "", 9)
-    pdf.cell(0, 5, f"Score: {score}/{len(QUIZ)}")
+    pdf.cell(0, 5, f"Score: {score}/{quiz_total}")
     pdf.ln(10)
 
     pdf.set_font("Helvetica", "B", 12)
@@ -807,6 +1130,8 @@ if "quiz_score" not in st.session_state:
     st.session_state.quiz_score = 0
 if "quiz_submitted" not in st.session_state:
     st.session_state.quiz_submitted = False
+if "quiz_questions" not in st.session_state:
+    st.session_state.quiz_questions = QUIZ[:10]
 
 # --------------------------- HEADER --------------------------
 st.markdown("""
@@ -847,10 +1172,16 @@ section = st.sidebar.radio(
     label_visibility="collapsed"
 )
 
+if section == "Posttest" and st.session_state.get("previous_section") != "Posttest":
+    st.session_state.quiz_questions = random.sample(QUIZ, 10)
+    st.session_state.quiz_score = 0
+    st.session_state.quiz_submitted = False
+st.session_state.previous_section = section
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### Quiz Status")
 if st.session_state.quiz_submitted:
-    st.sidebar.success(f"Quiz: {st.session_state.quiz_score}/{len(QUIZ)}")
+    st.sidebar.success(f"Quiz: {st.session_state.quiz_score}/{len(st.session_state.quiz_questions)}")
 else:
     st.sidebar.info("Quiz: Not submitted")
 
@@ -858,6 +1189,15 @@ else:
 if section == "Aim":
     st.markdown('<div class="vlab-h2">Aim of the Experiment</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="vlab-aim">{AIM}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="vlab-h2">Virtual Lab Preview</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="vlab-text">The diagram below shows the kind of connected data '
+        'that the virtual lab lets you inspect: students, courses, institutions and '
+        'companies connected by typed relationships.</div>',
+        unsafe_allow_html=True
+    )
+    st.plotly_chart(graph_figure(preview=True), use_container_width=True)
 
     st.markdown('<div class="vlab-h2">Objectives</div>', unsafe_allow_html=True)
     st.markdown('<div class="vlab-text">After completing this experiment you will be able to:</div>', unsafe_allow_html=True)
@@ -871,6 +1211,10 @@ if section == "Aim":
 elif section == "Introduction":
     st.markdown('<div class="vlab-h2">Introduction</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="vlab-text">{INTRODUCTION}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="vlab-h2">Real-World Applications</div>', unsafe_allow_html=True)
+    for application in REAL_WORLD_APPLICATIONS:
+        st.markdown(f"- {application}")
 
     st.markdown('<div class="vlab-h2">Experiment Scope</div>', unsafe_allow_html=True)
     st.markdown("""
@@ -918,11 +1262,43 @@ elif section == "Simulation":
     </div>
     """, unsafe_allow_html=True)
 
+    st.markdown('<div class="vlab-h3">Use a CSV Graph</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="vlab-text">Upload a relationship edge-list CSV to replace the sample graph. '
+        'Required columns are <b>source</b>, <b>relationship</b> and <b>target</b>; optional columns '
+        'are <b>source_label</b>, <b>source_name</b>, <b>target_label</b> and <b>target_name</b>.</div>',
+        unsafe_allow_html=True
+    )
+    with st.expander("CSV format example"):
+        st.code(
+            "source,relationship,target,source_label,target_label,source_name,target_name\n"
+            "alice,ENROLLED_IN,python,Student,Course,Alice,Python\n"
+            "python,RELATED_TO,ml,Course,Course,Python,Machine Learning",
+            language="csv"
+        )
+    uploaded_graph = st.file_uploader("Upload graph CSV", type=["csv"], key="simulation_graph_csv")
+    available_query_defs = QUERY_DEFS
+    ACTIVE_QUERY_SPECS.clear()
+    if uploaded_graph is not None:
+        try:
+            imported_nodes, imported_edges = graph_from_csv(uploaded_graph)
+            NODES.clear()
+            NODES.extend(imported_nodes)
+            EDGES.clear()
+            EDGES.extend(imported_edges)
+            NODE_BY_ID.clear()
+            NODE_BY_ID.update({node["id"]: node for node in NODES})
+            available_query_defs, csv_query_specs = build_csv_query_defs(NODES, EDGES)
+            ACTIVE_QUERY_SPECS.update(csv_query_specs)
+            st.success(f"Loaded {len(NODES)} nodes and {len(EDGES)} relationships from {uploaded_graph.name}.")
+        except (pd.errors.ParserError, ValueError) as error:
+            st.error(f"Could not load the CSV graph: {error}")
+
     st.plotly_chart(graph_figure(), use_container_width=True)
 
     st.markdown('<div class="vlab-h3">Select Query</div>', unsafe_allow_html=True)
-    query_name = st.selectbox("Choose a query", list(QUERY_DEFS.keys()), label_visibility="collapsed")
-    q = QUERY_DEFS[query_name]
+    query_name = st.selectbox("Choose a query", list(available_query_defs.keys()), label_visibility="collapsed")
+    q = available_query_defs[query_name]
 
     st.markdown(f"""
     <div class="sim-box">
@@ -932,7 +1308,10 @@ elif section == "Simulation":
     """, unsafe_allow_html=True)
 
     st.markdown("**Cypher Query**")
-    st.code(q["cypher"], language="cypher")
+    st.markdown(
+        f'<div class="cypher-query">{render_cypher_query(q["cypher"])}</div>',
+        unsafe_allow_html=True
+    )
 
     if st.button("Execute Query", type="primary", use_container_width=True):
         rows, edges, message = execute_query(query_name)
@@ -1032,11 +1411,13 @@ elif section == "Exercises":
 # -------------------------- POSTTEST ------------------------
 elif section == "Posttest":
     st.markdown('<div class="vlab-h2">Posttest</div>', unsafe_allow_html=True)
-    st.write("Choose the correct answer for each question and submit the quiz.")
+    st.write("Choose the correct answer for each of the 10 randomly selected questions and submit the quiz.")
+
+    active_quiz = st.session_state.quiz_questions
 
     with st.form("posttest"):
         answers = []
-        for i, (question, options, correct, explanation) in enumerate(QUIZ):
+        for i, (question, options, correct, explanation) in enumerate(active_quiz):
             st.markdown(f"**Q{i+1}. {question}**")
             answer = st.radio(
                 "Select an option:",
@@ -1049,18 +1430,18 @@ elif section == "Posttest":
         submitted = st.form_submit_button("Submit Quiz", type="primary")
 
     if submitted:
-        score = sum(answers[i] == QUIZ[i][2] for i in range(len(QUIZ)))
+        score = sum(answers[i] == active_quiz[i][2] for i in range(len(active_quiz)))
         st.session_state.quiz_score = score
         st.session_state.quiz_submitted = True
 
         st.markdown('<div class="vlab-h3">Evaluation</div>', unsafe_allow_html=True)
-        for i, (_, options, correct, explanation) in enumerate(QUIZ):
+        for i, (_, options, correct, explanation) in enumerate(active_quiz):
             if answers[i] == correct:
                 st.success(f"Q{i+1}: Correct. {explanation}")
             else:
                 st.error(f"Q{i+1}: Incorrect. Correct answer: {options[correct]}. {explanation}")
 
-        st.info(f"Final Score: {score}/{len(QUIZ)} ({score / len(QUIZ) * 100:.0f}%)")
+        st.info(f"Final Score: {score}/{len(active_quiz)} ({score / len(active_quiz) * 100:.0f}%)")
 
 # ---------------------- REPORT GENERATION -------------------
 elif section == "Report Generation":
@@ -1087,7 +1468,7 @@ elif section == "Report Generation":
     st.write(f"**Experiment:** {TITLE}")
     st.write(f"**Student:** {student_name}")
     st.write(f"**Roll / ID:** {student_roll}")
-    st.write(f"**Quiz Score:** {st.session_state.quiz_score}/{len(QUIZ)}")
+    st.write(f"**Quiz Score:** {st.session_state.quiz_score}/{len(st.session_state.quiz_questions)}")
 
     if st.session_state.trials:
         st.dataframe(
@@ -1104,7 +1485,8 @@ elif section == "Report Generation":
         experiment_date,
         st.session_state.trials,
         st.session_state.quiz_score,
-        observations
+        observations,
+        len(st.session_state.quiz_questions)
     )
 
     st.download_button(
@@ -1120,9 +1502,18 @@ elif section == "Report Generation":
 elif section == "References":
     st.markdown('<div class="vlab-h2">References</div>', unsafe_allow_html=True)
     st.markdown("""
-    1. Virtual Labs, IIT Kharagpur — Software Engineering Virtual Laboratory.
-    2. Cypher documentation and graph pattern concepts.
-    3. Course material on Knowledge Graphs and graph databases.
+    1. [Neo4j Cypher Manual](https://neo4j.com/docs/cypher-manual/current/)
+    2. [Neo4j GraphAcademy](https://graphacademy.neo4j.com/)
+    3. [openCypher Project](https://opencypher.org/)
+    4. [Neo4j Graph Data Modeling Guidelines](https://neo4j.com/developer/guide-data-modeling/)
+    5. [W3C RDF 1.1 Concepts](https://www.w3.org/TR/rdf11-concepts/)
+    6. [W3C SPARQL 1.1 Query Language](https://www.w3.org/TR/sparql11-query/)
+    7. [Wikidata: Introduction](https://www.wikidata.org/wiki/Wikidata:Introduction)
+    8. [DBpedia Knowledge Base](https://www.dbpedia.org/)
+    9. [Google: Introducing the Knowledge Graph](https://blog.google/products/search/introducing-knowledge-graph-things-not/)
+    10. [Microsoft Graph Data Connect](https://learn.microsoft.com/en-us/graph/data-connect-concept-overview)
+    11. [Stanford Encyclopedia of Philosophy: Knowledge Representation](https://plato.stanford.edu/entries/logic-knowledge-representation/)
+    12. [Virtual Labs India](https://vlab.co.in/)
     """)
 
     st.markdown('<div class="vlab-h3">Credits</div>', unsafe_allow_html=True)
