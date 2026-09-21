@@ -521,15 +521,22 @@ def build_csv_query_defs(nodes, edges):
             "concept": "Relationship retrieval",
             "description": "Retrieves every relationship in the uploaded graph.",
             "kind": "all_edges"
+        },
+        "CSV 3 — Discover two-hop paths": {
+            "cypher": "MATCH p=(a)-[r1]->(b)-[r2]->(c) RETURN p",
+            "concept": "Multi-hop traversal",
+            "description": "Finds paths that cross two consecutive relationships in the uploaded graph.",
+            "kind": "two_hop"
         }
     }
     specs = {
         "CSV 1 — Retrieve all nodes": "all_nodes",
-        "CSV 2 — Retrieve all relationships": "all_edges"
+        "CSV 2 — Retrieve all relationships": "all_edges",
+        "CSV 3 — Discover two-hop paths": "two_hop"
     }
 
     labels = sorted({node["label"] for node in nodes})
-    for index, label in enumerate(labels, start=3):
+    for index, label in enumerate(labels, start=4):
         name = f"CSV {index} — Retrieve {label} nodes"
         query_defs[name] = {
             "cypher": f"MATCH (n:{label}) RETURN n",
@@ -541,7 +548,7 @@ def build_csv_query_defs(nodes, edges):
         specs[name] = ("label", label)
 
     relationships = sorted({edge[1] for edge in edges})
-    offset = len(labels) + 3
+    offset = len(labels) + 4
     for index, relationship in enumerate(relationships, start=offset):
         name = f"CSV {index} — Retrieve {relationship} relationships"
         query_defs[name] = {
@@ -608,6 +615,25 @@ def execute_query(name):
                 for source, relationship, target in EDGES
             ]
             return rows, EDGES, "All relationships in the uploaded graph were retrieved."
+        if spec == "two_hop":
+            paths = [
+                (first, second)
+                for first in EDGES
+                for second in EDGES
+                if first[2] == second[0]
+            ]
+            rows = [
+                {
+                    "source": NODE_BY_ID[first[0]]["name"],
+                    "first_relationship": first[1],
+                    "middle": NODE_BY_ID[first[2]]["name"],
+                    "second_relationship": second[1],
+                    "target": NODE_BY_ID[second[2]]["name"]
+                }
+                for first, second in paths
+            ]
+            path_edges = [edge for path in paths for edge in path]
+            return rows, path_edges, "Two-hop paths in the uploaded graph were retrieved."
 
         kind, value = spec
         if kind == "label":
